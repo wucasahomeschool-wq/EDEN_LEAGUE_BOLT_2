@@ -1,0 +1,168 @@
+// Aging & The Experience Shift.
+// Players carry an Age. On ingest, age is inferred from a physical-to-mental
+// attribute ratio. Each offseason, veterans (30+) regress physically and
+// progress mentally; players who decay past a threshold or hit 35 retire and
+// are replaced by a fresh 17-year-old academy prospect.
+import type { LeaguePlayer } from "@/state/league";
+import { computeOverall } from "@/lib/ratings";
+
+const rand = (min: number, max: number) => Math.floor(Math.random() * (max - min + 1)) + min;
+
+const mean = (a: number[]) => (a.length === 0 ? 0 : a.reduce((s, v) => s + v, 0) / a.length);
+
+// Physical-to-mental ratio classification → starting age band.
+export function computeStartingAge(p: LeaguePlayer): number {
+  const physical = mean([p.PAC, p.STA]);
+  const mental = mean([p.VIS, p.COM, p.POS_attr]);
+  const ratio = mental === 0 ? 2 : physical / mental;
+  if (ratio >= 1.15) return rand(18, 23); // Prospect
+  if (ratio <= 0.95) return rand(30, 34); // Veteran
+  return rand(24, 29); // Prime
+}
+
+// Retirement is a fully MANUAL decision — there are no automatic age/decay
+// cutoffs. Aging only shifts attributes (youth growth, veteran shift); players
+// are only ever removed from a roster via the "Remove Player" control.
+
+export interface AgingResult {
+  player: LeaguePlayer;
+  retired: boolean; // always false now — kept for call-site compatibility
+  veteranFulfilled: boolean; // hit max mental progression this offseason
+  replacement?: LeaguePlayer;
+}
+
+// Pools used to give every academy prospect a unique, identifiable name. Names
+// are used as identifiers across lineups/leaderboards, so duplicates would
+// collide — combine a random name with a unique numeric suffix.
+const PROSPECT_FIRST = [
+  "Theo",
+  "Luka",
+  "Mateo",
+  "Kai",
+  "Noah",
+  "Eli",
+  "Arlo",
+  "Rio",
+  "Zane",
+  "Cody",
+  "Finn",
+  "Jude",
+  "Levi",
+  "Remy",
+  "Cruz",
+  "Ezra",
+  "Niko",
+  "Dario",
+  "Sami",
+  "Tomas",
+];
+const PROSPECT_LAST = [
+  "Vega",
+  "Bauer",
+  "Reyes",
+  "Castro",
+  "Mensah",
+  "Okafor",
+  "Sato",
+  "Lindqvist",
+  "Moreau",
+  "Petrov",
+  "Haaland",
+  "Diallo",
+  "Costa",
+  "Nakamura",
+  "Ferreira",
+  "Andersen",
+  "Kovac",
+  "Esposito",
+  "Marsh",
+  "Volkov",
+];
+let prospectCounter = 0;
+function uniqueProspectName(): string {
+  const first = PROSPECT_FIRST[rand(0, PROSPECT_FIRST.length - 1)];
+  const last = PROSPECT_LAST[rand(0, PROSPECT_LAST.length - 1)];
+  prospectCounter += 1;
+  // Suffix guarantees uniqueness even if the random pick repeats.
+  return `${first} ${last} #${prospectCounter}${rand(10, 99)}`;
+}
+
+// Generate a fresh 17-year-old baseline prospect to replace a retiree.
+export function youthProspect(position: string): LeaguePlayer {
+  const base: LeaguePlayer = {
+    name: uniqueProspectName(),
+    position,
+    starter: false,
+    age: 17,
+    morale: 50,
+    injuryWeeks: 0,
+    suspensionWeeks: 0,
+    reservedSlot: null,
+    yellowLog: [],
+    salary: 5.0,
+    contractYears: 2,
+    rating: 5.0,
+    FIN: 5.0,
+    SHO: 5.0,
+    PAS: 4.5,
+    VIS: 4.5,
+    DRI: 5.5,
+    PAC: 6.5,
+    STA: 6.5,
+    DEF: 5.0,
+    TAC: 5.0,
+    POS_attr: 4.0,
+    COM: 4.0,
+    WR: 5.5,
+    AGG: 5.0,
+    STR: 5.0,
+    AER: 5.0,
+    BCO: 5.0,
+  };
+  return { ...base, rating: computeOverall(base) };
+}
+
+// Advance one offseason for a single player. Returns updated player (rating
+// recomputed) and veteran-fulfilment status.
+export function ageOnePlayer(p: LeaguePlayer): AgingResult {
+  const r1 = (n: number) => Math.round(n * 10) / 10;
+  const age = (p.age ?? 25) + 1;
+  const next: LeaguePlayer = {
+    ...p,
+    age,
+    fatigue: 0,
+    sharpness: 50,
+  };
+  let veteranFulfilled = false;
+
+  if (age >= 30) {
+    // A: Physical Attribute Decay (Ages 30+)
+    // Pace (PAC) and Stamina (STA) (and Work Rate WR) deteriorate exponentially:
+    // Decay Rate = 0.05 x (Current Age - 29)^2
+    const decayRate = 0.05 * Math.pow(age - 29, 2);
+    next.PAC = Math.max(1.0, r1(next.PAC - decayRate));
+    next.STA = Math.max(1.0, r1(next.STA - decayRate));
+    next.WR = Math.max(1.0, r1(next.WR - decayRate));
+
+    // B: Mental Attribute Compensation (Ages 30+)
+    // Vision (VIS), Composure (COM), Positioning (POS_attr), and Defending (DEF) increase automatically:
+    // Mental Growth = 0.08 x (Current Age - 29)
+    const mentalGrowth = 0.08 * (age - 29);
+    const before = next.VIS + next.POS_attr + next.COM;
+    next.VIS = Math.min(10.0, r1(next.VIS + mentalGrowth));
+    next.POS_attr = Math.min(10.0, r1(next.POS_attr + mentalGrowth));
+    next.COM = Math.min(10.0, r1(next.COM + mentalGrowth));
+    next.DEF = Math.min(10.0, r1(next.DEF + mentalGrowth));
+
+    if (next.VIS >= 10 && next.POS_attr >= 10 && next.COM >= 10 && before < 30) {
+      veteranFulfilled = true;
+    }
+  }
+
+  next.rating = computeOverall(next);
+
+  // Absolute Physical Limit Retirement
+  const retired = next.PAC < 2.0 || next.STA < 2.0;
+
+  return { player: next, retired, veteranFulfilled };
+}
