@@ -27,7 +27,6 @@ function ManagerGenerationWatcherInner() {
   const RETRY_COOLDOWN_MS = 60_000;
 
   useEffect(() => {
-    if (!mounted) return;
     const pending = Object.entries(state.managers ?? {}).filter(([, m]) => m.pendingGeneration);
     const now = Date.now();
     // Build the universe of names that the new manager must NOT collide with:
@@ -69,7 +68,7 @@ function ManagerGenerationWatcherInner() {
         });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.managers, mounted]);
+  }, [state.managers]);
 
   return null;
 }
